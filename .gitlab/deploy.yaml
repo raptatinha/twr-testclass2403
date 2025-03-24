@@ -1,0 +1,46 @@
+## .deploy-dashstack - deploy the currently built artifact to the dashstack (feature environments)
+.deploy-dashstack:
+  image: docker:git
+  dependencies: []
+  variables:
+    AWS_DEFAULT_REGION: us-east-2
+    DESTROY: 'false'
+  script:
+    - apk --no-cache add bash curl gettext groff jq less python3 py3-pip unzip wget
+    - pip3 install awscli
+    - export PATH=$PATH:/usr/local/bin
+    - git clone https://gitlab-ci-token:${CI_BUILD_TOKEN}@gitlab.com/company/devops/dash-stack-deployer.git dash-stack-deployer
+    - cd dash-stack-deployer/
+    - bash deploy.sh
+
+## .teardown-dashstack - tear down the current dashstack
+.teardown-dashstack:
+  image: alpine:latest
+  variables:
+    AWS_DEFAULT_REGION: us-east-2
+    GIT_STRATEGY: none
+  script:
+    - apk --no-cache add bash curl gettext git groff jq less python3 py3-pip unzip wget
+    - pip3 install awscli
+    - export PATH=$PATH:/usr/local/bin
+    - git clone https://gitlab-ci-token:${CI_BUILD_TOKEN}@gitlab.com/company/devops/dash-stack-deployer.git dash-stack-deployer
+    - cd dash-stack-deployer/
+    - bash destroy-stack.sh
+
+## deploy-ecs - deploy to ECS service
+# Variables:
+#   AWS_DEFAULT_REGION: region of the service to be deployed to
+#   CLUSTER_NAME: Name of the cluster containing the service to be deployed to
+#   SERVICE_NAME: Name of the service to be deployed to.
+#   IMAGE_PATH: Path to image including the tag
+#   TIMEOUT: Timeout before the ECS deploy script fails
+.deploy-ecs:
+  image: 260401931273.dkr.ecr.us-east-2.amazonaws.com/base/deployer:base
+  variables:
+    AWS_DEFAULT_REGION: us-east-1
+    SERVICE_NAME: conn-projeto-prod
+    CLUSTER_NAME: connectivity-prod
+    IMAGE_PATH: latest
+    TIMEOUT: 300
+  script:
+    - ecs-deploy -n ${SERVICE_NAME} -c ${CLUSTER_NAME} -t ${TIMEOUT} -i ${IMAGE_PATH}

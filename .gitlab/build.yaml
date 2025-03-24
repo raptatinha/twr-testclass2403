@@ -1,0 +1,17 @@
+## build - builds an artifact of the current version with a specific build environment (staging, prod)
+# Variables:
+#   BUILD_ENV - this is the environment passed to NPM when building to specify the set of variables such as
+#               API url and secrets.
+#   ARTIFACT_PREFIX - Prefix the s3 object artifact
+.build:
+  extends: .npm-install
+  variables:
+    BUILD_ENV: 'feature'
+  script:
+    - echo "machine gitlab.com login gitlab-ci-token password ${CI_JOB_TOKEN}" > /root/.netrc
+    - chmod 0600 /root/.netrc
+    - npm run build -- $BUILD_ENV
+  artifacts:
+    name: $ARTIFACT_PREFIX
+    paths:
+      - dist/

@@ -1,0 +1,292 @@
+stages:
+  - unit-test-and-build
+  - deploy
+  - staging-deploy
+  - end-to-end-test
+  - prod-deploy
+  - prod-end-to-end
+
+include:
+  - project: 'project'
+    file: '/paths/full.yaml'
+  - '.gitlab/*.yaml'
+
+variables:
+  STAGING_IMAGE: image
+  PROD_IMAGE: image
+
+default:
+  image: node:16.14.0
+  tags:
+    - k8s
+
+unit-test:
+  stage: unit-test-and-build
+  extends: .unit-test
+
+feature-branch-build:
+  stage: unit-test-and-build
+  extends: .build
+  variables:
+    BUILD_ENV: 'feature'
+    ARTIFACT_PREFIX: 'feature'
+  only:
+    variables:
+      - $CI_COMMIT_REF_SLUG =~ /^feature.*/
+      - $CI_COMMIT_REF_SLUG =~ /^bugfix.*/
+      - $CI_COMMIT_REF_SLUG =~ /^hotfix.*/
+      - $CI_COMMIT_REF_SLUG == "develop"
+
+feature-branch-package:
+  stage: unit-test-and-build
+  extends: .package-multiple
+  dependencies:
+    - feature-branch-build
+  needs:
+    - feature-branch-build
+  variables:
+    CACHE_REPO_NAME: projname
+    DOCKER_FILE_PATH: Dockerfile
+    IMAGE_DESTINATION_1: $STAGING_IMAGE:$CI_COMMIT_SHA
+    IMAGE_DESTINATION_2: $STAGING_IMAGE:$CI_COMMIT_REF_SLUG
+  only:
+    variables:
+      - $CI_COMMIT_REF_SLUG =~ /^feature.*/
+      - $CI_COMMIT_REF_SLUG =~ /^bugfix.*/
+      - $CI_COMMIT_REF_SLUG =~ /^hotfix.*/
+      - $CI_COMMIT_REF_SLUG == "develop"
+
+.sourcemaps:
+  stage: deploy
+  needs:
+    - feature-branch-build
+    - feature-branch-package
+  image: node:16.14.0
+
+feature-branch-deploy:
+  stage: deploy
+  extends: .deploy-dashstack
+  dependencies: []
+  needs:
+    - feature-branch-package
+  environment:
+    name: $CI_COMMIT_REF_SLUG
+    url: https://url-${CI_COMMIT_REF_SLUG}.dev.com/
+    on_stop: feature-branch-teardown
+  only:
+    variables:
+      - $CI_COMMIT_REF_SLUG =~ /^feature.*/
+      - $CI_COMMIT_REF_SLUG =~ /^bugfix.*/
+      - $CI_COMMIT_REF_SLUG =~ /^hotfix.*/
+      - $CI_COMMIT_REF_SLUG == "develop"
+
+feature-branch-teardown:
+  stage: deploy
+  extends: .teardown-dashstack
+  environment:
+    name: $CI_COMMIT_REF_SLUG
+    action: stop
+  when: manual
+  only:
+    variables:
+      - $CI_COMMIT_REF_SLUG =~ /^feature.*/
+      - $CI_COMMIT_REF_SLUG =~ /^bugfix.*/
+      - $CI_COMMIT_REF_SLUG =~ /^hotfix.*/
+
+feature-branch-upload-sourcemaps:
+  extends: .sourcemaps
+  dependencies:
+    - feature-branch-build
+  needs:
+    - feature-branch-build
+    - feature-branch-deploy
+  only:
+    variables:
+      - $CI_COMMIT_REF_SLUG =~ /^feature.*/
+      - $CI_COMMIT_REF_SLUG =~ /^bugfix.*/
+      - $CI_COMMIT_REF_SLUG =~ /^hotfix.*/
+      - $CI_COMMIT_REF_SLUG == "develop"
+  script:
+    - >
+      npx @datadog/datadog-ci sourcemaps upload
+      --service=projname
+      --release-version=$CI_COMMIT_SHORT_SHA
+      --minified-path-prefix=https://url-${CI_COMMIT_REF_SLUG}.dev.com/
+      ./dist
+
+feature-branch-end-to-end-test:
+  stage: end-to-end-test
+  extends: .end-to-end-test
+  needs:
+    - feature-branch-deploy
+  image: mcr.microsoft.com/playwright:v1.24.2-focal
+  allow_failure: true
+  script:
+    - npm run test:e2e:ci
+    - touch SUCCESS
+  variables:
+    PASSWORD: $PASSWORD
+  only:
+    variables:
+      - $CI_COMMIT_REF_SLUG =~ /^feature.*/
+      - $CI_COMMIT_REF_SLUG =~ /^bugfix.*/
+      - $CI_COMMIT_REF_SLUG =~ /^hotfix.*/
+      - $CI_COMMIT_REF_SLUG == "develop"
+  after_script:
+    - if [[ -f "SUCCESS" ]]; then echo EXIT_STATUS=0; else EXIT_STATUS=1; fi
+    - source ./.gitlab/scripts/e2e-slack-integration.sh; share_slack_update
+
+# Staging Section
+staging-build:
+  stage: unit-test-and-build
+  extends: .build
+  variables:
+    BUILD_ENV: 'staging'
+    ARTIFACT_PREFIX: 'staging'
+  only:
+    - main
+
+staging-ci-package:
+  stage: unit-test-and-build
+  extends: .package
+  dependencies:
+    - staging-build
+  needs:
+    - staging-build
+  variables:
+    CACHE_REPO_NAME: projname
+    DOCKER_FILE_PATH: Dockerfile
+    IMAGE_DESTINATION: $STAGING_IMAGE:staging
+  only:
+    - main
+
+staging-ecs-deploy:
+  stage: staging-deploy
+  extends: .deploy-ecs
+  needs:
+    - staging-ci-package
+  environment:
+    name: Staging
+    url: https://staging.env.com
+  variables:
+    AWS_DEFAULT_REGION: us-east-2
+    SERVICE_NAME: conn-projname-dev
+    CLUSTER_NAME: dev-dev
+    IMAGE_PATH: $STAGING_IMAGE:staging
+    TIMEOUT: 300
+  only:
+    - main
+
+staging-s3-deploy:
+  stage: staging-deploy
+  image: image
+  dependencies:
+    - staging-build
+  needs:
+    - staging-build
+    - staging-ci-package
+  variables:
+    AWS_DEFAULT_REGION: us-east-2
+  script:
+    - aws s3 sync dist/ s3://projname.url.com/ --delete --include="*"
+  only:
+    - main
+
+staging-end-to-end-test:
+  stage: end-to-end-test
+  extends: .end-to-end-test
+  needs:
+    - staging-ecs-deploy
+    - staging-s3-deploy
+  image: mcr.microsoft.com/playwright:v1.24.2-focal
+  allow_failure: true
+  script:
+    - npm run test:e2e:ci:staging
+    - touch SUCCESS
+  variables:
+    PASSWORD: $PASSWORD
+  only:
+    - main
+  after_script:
+    - if [[ -f "SUCCESS" ]]; then echo EXIT_STATUS=0; else EXIT_STATUS=1; fi
+    - source ./.gitlab/scripts/e2e-slack-integration.sh; share_slack_update
+
+# Production
+prod-build:
+  stage: unit-test-and-build
+  extends: .build
+  variables:
+    BUILD_ENV: 'prod'
+    ARTIFACT_PREFIX: 'prod'
+  after_script:
+    - bash ./build/scripts/build-metrics.sh
+    - node build/scripts/projeto-migration-metrics.mjs ${SLACK_AUTH_TOKEN} # Run a script to collect stats and post to slack
+  only:
+    - main
+
+prod-package:
+  stage: unit-test-and-build
+  extends: .package-multiple
+  dependencies:
+    - prod-build
+  needs:
+    - prod-build
+  variables:
+    CACHE_REPO_NAME: projname
+    DOCKER_FILE_PATH: Dockerfile
+    IMAGE_DESTINATION_1: $PROD_IMAGE:latest
+    IMAGE_DESTINATION_2: $PROD_IMAGE:$CI_COMMIT_SHORT_SHA
+  only:
+    - main
+
+prod-ecs-deploy:
+  stage: prod-deploy
+  extends: .deploy-ecs
+  dependencies:
+    - prod-package
+  needs:
+    - prod-package
+    - unit-test
+  variables:
+    AWS_DEFAULT_REGION: us-e-1
+    SERVICE_NAME: conn-projname-prod
+    CLUSTER_NAME: prod-prod
+    IMAGE_PATH: $PROD_IMAGE:$CI_COMMIT_SHORT_SHA
+    TIMEOUT: 300
+  only:
+    - main
+
+prod-upload-sourcemaps:
+  stage: prod-deploy
+  extends: .sourcemaps
+  only:
+    - main
+  dependencies:
+    - prod-build
+  needs:
+    - prod-build
+  script:
+    - >
+      npx @datadog/datadog-ci sourcemaps upload
+      --service=projname
+      --release-version=$CI_COMMIT_SHORT_SHA
+      --minified-path-prefix=https://prod.env.com/
+      ./dist
+
+prod-end-to-end-test:
+  stage: prod-end-to-end
+  extends: .end-to-end-test
+  needs:
+    - prod-ecs-deploy
+  image: mcr.microsoft.com/playwright:v1.24.2-focal
+  allow_failure: true
+  script:
+    - npm run test:e2e:ci:production
+    - touch SUCCESS
+  variables:
+    PASSWORD: $PASSWORD
+  only:
+    - main
+  after_script:
+    - if [[ -f "SUCCESS" ]]; then echo EXIT_STATUS=0; else EXIT_STATUS=1; fi
+    - source ./.gitlab/scripts/e2e-slack-integration.sh; share_slack_update

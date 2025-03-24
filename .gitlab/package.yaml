@@ -1,0 +1,33 @@
+## .package - build and package projeto container
+# Required Variables:
+#   CACHE_REPO_NAME - Name of the ECR cache repo
+#   DOCKER_FILE_PATH - Path to Dockerfile for build
+#   IMAGE_DESTINATION - image path + tag of the first push destination
+.package:
+  extends: .kaniko-package
+  variables:
+    KANIKO_CACHE_REPO: ${CACHE_REPO_NAME}
+    KANIKO_CACHE_AWS_REGION: us-east-2
+  script:
+    - /kaniko/executor ${KANIKO_CACHE_ARGS}
+      --context .
+      --dockerfile ${DOCKER_FILE_PATH}
+      --destination ${IMAGE_DESTINATION}
+
+## .package - build and package projeto container
+# Required Variables:
+#   CACHE_REPO_NAME - Name of the ECR cache repo
+#   DOCKER_FILE_PATH - Path to Dockerfile for build
+#   IMAGE_DESTINATION_1 - image path + tag of the first push destination
+#   IMAGE_DESTINATION_2 - image path + tag of the second push destination
+.package-multiple:
+  extends: .kaniko-package
+  variables:
+    KANIKO_CACHE_REPO: ${CACHE_REPO_NAME}
+    KANIKO_CACHE_AWS_REGION: us-east-2
+  script:
+    - /kaniko/executor ${KANIKO_CACHE_ARGS}
+      --context .
+      --dockerfile ${DOCKER_FILE_PATH}
+      --destination ${IMAGE_DESTINATION_1}
+      --destination ${IMAGE_DESTINATION_2}

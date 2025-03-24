@@ -1,0 +1,195 @@
+stages:
+  - Validate
+  - QC
+  - Staging
+  - Production
+
+.tests_setup:
+  image: mcr.microsoft.com/playwright:v1.48.1 #https://playwright.dev/docs/docker#image-tags
+  allow_failure: false
+  id_tokens:
+    VAULT_ID_TOKEN:
+      aud: https://gitlab.com
+  variables:
+    KUBERNETES_CPU_REQUEST: "5"
+    KUBERNETES_MEMORY_REQUEST: 8Gi #make sure KUBERNETES_MEMORY_LIMIT and KUBERNETES_MEMORY_REQUEST always have the same value.
+    KUBERNETES_MEMORY_LIMIT: 8Gi #make sure KUBERNETES_MEMORY_LIMIT and KUBERNETES_MEMORY_REQUEST always have the same value.
+    VAULT_AUTH_ROLE: pipeline-read
+    VAULT_AUTH_PATH: jwt
+    VAULT_SERVER_URL: https://vault.company.com
+    CI: "true"
+  secrets:
+    SLACK_BOT_USER_OAUTH_TOKEN:
+      vault: gitlab-pipelines/automation/SLACK_BOT_USER_OAUTH_TOKEN@secret
+      file: false
+    QC_USERNAME:
+      vault: gitlab-pipelines/automation/QC_USERNAME@secret
+      file: false
+    QC_PASSWORD:
+      vault: gitlab-pipelines/automation/QC_PASSWORD@secret
+      file: false
+    QC_API_KEY:
+      vault: gitlab-pipelines/automation/QC_API_KEY@secret
+      file: false
+    STG_USERNAME:
+      vault: gitlab-pipelines/automation/STG_USERNAME@secret
+      file: false
+    STG_PASSWORD:
+      vault: gitlab-pipelines/automation/STG_PASSWORD@secret
+      file: false
+    STG_API_KEY:
+      vault: gitlab-pipelines/automation/STG_API_KEY@secret
+      file: false
+    PROD_USERNAME:
+      vault: gitlab-pipelines/automation/PRD_USERNAME@secret
+      file: false
+    PROD_PASSWORD:
+      vault: gitlab-pipelines/automation/PRD_PASSWORD@secret
+      file: false
+    PROD_API_KEY:
+      vault: gitlab-pipelines/automation/PRD_API_KEY@secret
+      file: false
+  cache:
+    key:
+      files:
+        - package-lock.json
+      prefix: $CI_COMMIT_REF_NAME
+    paths:
+      - .npm
+      - node_modules
+    policy: pull-push
+    when: always
+  artifacts:
+    when: always
+    paths:
+      - playwright-report/
+    reports:
+      junit: playwright-report/playwright-test-results.xml
+
+.tests_run:
+  script:
+    - set -x
+    - npm config set cache $CI_PROJECT_DIR/.npm
+    - npm ci
+    - |
+      if [[ -z "$EXTRA_ARGS" ]]; then
+        if [[ -z "$TEST_TAG" ]]; then
+          echo "========= Running all tests in ${ENVIRONMENT} environment"
+          npm run test
+        else
+          echo "========= Running tests in ${ENVIRONMENT} environment with tags ${TEST_TAG}"
+          npm run test -- --grep "$TEST_TAG"
+        fi
+      else
+        echo "========= Running tests in ${ENVIRONMENT} environment with additional arguments"
+        npm run test -- $EXTRA_ARGS
+      fi
+    - touch SUCCESS
+
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+
+variables: # pre-filled values for Run pipeline manual jobs
+  BE_BRANCH:
+    description: "The backend branch name, ex: master"
+  FE_BRANCH:
+    description: "The frontend branch name, ex: main"
+  TEST_TAG:
+    description: "The Tag defined in the tests specs file, ex: @login or @login|@podium"
+  MOCK:
+    description: "Default is true for QC and false for staging and production. When true, network requests are intercepted and mocked using predefined rules."
+  EXTRA_ARGS:
+    description: "Additional arguments or CLI commands appended to the run test command, ex: --repeat-each=2"
+
+##############################################
+##############################################
+##############  PRODUCTION JOBS
+##############################################
+production-tests:
+  stage: Production
+  needs: []
+  extends:
+    - .tests_setup
+    - .tests_run
+  variables:
+    ENVIRONMENT: "PROD"
+    ACCOUNT_ID: "726"
+    MOCK: "false"
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "pipeline" && $CI_PIPELINE_SOURCE == "merge_request_event" && $GITLAB_USER_NAME == "renovate_bot" # when pipeline is triggered by renovate-bot MR
+      when: manual
+    - if: $CI_PIPELINE_SOURCE != "pipeline" && $CI_PIPELINE_SOURCE == "merge_request_event" # when pipeline is triggered by MR
+      when: always
+    - if: $CI_PIPELINE_SOURCE != "pipeline" # for local project pipeline only
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "pipeline" && $ENVIRONMENT == 'PROD' # when is triggered by another pipeline (projeto / projeto frontend)
+      when: always
+      allow_failure: true
+
+##############################################
+##############################################
+##############  STAGING JOBS
+##############################################
+staging-tests:
+  stage: Staging
+  needs: []
+  extends:
+    - .tests_setup
+    - .tests_run
+  variables:
+    ENVIRONMENT: "STG"
+    ACCOUNT_ID: "99126"
+    MOCK: "false"
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "pipeline" && $CI_PIPELINE_SOURCE == "merge_request_event" && $GITLAB_USER_NAME == "renovate_bot" # when pipeline is triggered by renovate-bot MR
+      when: manual
+    - if: $CI_PIPELINE_SOURCE != "pipeline" && $CI_PIPELINE_SOURCE == "merge_request_event" # when pipeline is triggered by MR
+      when: always
+    - if: $CI_PIPELINE_SOURCE != "pipeline" # for local project pipeline only
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "pipeline" && $ENVIRONMENT == 'STG' # when is triggered by another pipeline (projeto / projeto frontend)
+      when: always
+      allow_failure: true
+
+##############################################
+##############################################
+##############   QC JOBS
+##############################################
+qc-tests:
+  stage: QC
+  needs: []
+  extends:
+    - .tests_setup
+    - .tests_run
+  interruptible: true
+  variables:
+    ENVIRONMENT: "QC"
+    ACCOUNT_ID: "41"
+    BE_BRANCH: "master"
+    FE_BRANCH: "main"
+    MOCK: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "pipeline" && $CI_PIPELINE_SOURCE == "merge_request_event" && $GITLAB_USER_NAME == "renovate_bot" # when pipeline is triggered by renovate-bot MR
+      when: manual
+    - if: $CI_PIPELINE_SOURCE != "pipeline" && $CI_PIPELINE_SOURCE == "merge_request_event" # when pipeline is triggered by MR
+      when: always
+    - if: $CI_PIPELINE_SOURCE != "pipeline" && $CI_COMMIT_BRANCH == "main" # when commit to main branch
+      when: always
+    - if: $CI_PIPELINE_SOURCE != "pipeline" # when is triggered by a push to a branch
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "pipeline" && $ENVIRONMENT == 'QC' # when is triggered by another pipeline (projeto / projeto frontend)
+      when: always
+      allow_failure: true
+
+##############################################
+##############################################
+##############   Security JOBS
+##############################################
+include:
+  - project: "Company/apps/app-gitlab-pipelines"
+    ref: master
+    file: "services/secret-detection.yml"
+
+secret_detection:
+  stage: Validate
