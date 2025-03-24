@@ -35,4 +35,6 @@ jobs:
     - name: Display Playwright Report
       id: deployment
       uses: actions/deploy-pages@v4
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
      
