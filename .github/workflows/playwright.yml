@@ -7,13 +7,17 @@ on:
 permissions:
     id-token: write
     pages: write
-
+    contents: read
+  
 env:
   PASSWORD: ${{ secrets.PASSWORD }}
   USERNAME: ${{ secrets.USERNAME }}
 
 jobs:
   test:
+    environment:
+      name: github-pages
+      url: https://${{ env.USERNAME }}.github.io/${{ github.repository }}
     timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
