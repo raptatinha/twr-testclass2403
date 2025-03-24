@@ -1,0 +1,23 @@
+{
+  "name": "twr-testclass2403",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raptatinha/twr-testclass2403.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/raptatinha/twr-testclass2403/issues"
+  },
+  "homepage": "https://github.com/raptatinha/twr-testclass2403#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.51.1",
+    "@types/node": "^22.13.13"
+  }
+}
