@@ -8,6 +8,10 @@ permissions:
     id-token: write
     pages: write
 
+env:
+  PASSWORD: ${{ secrets.PASSWORD }}
+  USERNAME: ${{ secrets.USERNAME }}
+
 jobs:
   test:
     timeout-minutes: 60
